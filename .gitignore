@@ -1,0 +1,6 @@
+.idea/
+dist/
+tmp/
+vendor/
+.DS_Store
+chatter

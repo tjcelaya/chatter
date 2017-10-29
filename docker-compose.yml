@@ -1,0 +1,56 @@
+version: '3'
+services:
+
+  build-certs:
+    image: golang:1.8
+    command: cp /etc/ssl/certs/ca-certificates.crt /dist/ca-certificates.crt
+    volumes:
+      - ./dist:/dist
+
+  build-linux:
+    build:
+     context: .
+     dockerfile: Dockerfile.build
+     args:
+       - TARGET_GOOS=linux
+    command:
+      - cp
+      - /go/src/github.com/tjcelaya/chatter/chatter
+      - /dist/chatter-linux
+    volumes:
+      - ./dist:/dist
+
+  build-osx:
+    build:
+     context: .
+     dockerfile: Dockerfile.build
+     args:
+       - TARGET_GOOS=darwin
+    command: cp /go/src/github.com/tjcelaya/chatter/chatter /dist/chatter-darwin
+    volumes:
+      - ./dist:/dist
+
+  consul:
+    image: consul
+    command: agent -server -ui -client=0.0.0.0 -bootstrap
+    # command: agent -server -ui-dir=/ui -bootstrap-expect=3
+    restart: always
+    ports:
+      # - 53
+      # - 8300
+      # - 8301
+      # - 8302
+      # - 8400
+      - 8500:8500
+
+  chatter:
+#    image: tjcelaya/chatter:latest
+    image: tjcelaya/chatter:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.run
+    links:
+      - consul
+    volumes:
+      - ./dist:/dist
+

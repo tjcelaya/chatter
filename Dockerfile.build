@@ -1,0 +1,9 @@
+FROM golang:1.8
+
+ADD . /go/src/github.com/tjcelaya/chatter
+
+WORKDIR /go/src/github.com/tjcelaya/chatter
+
+ARG TARGET_GOOS=linux
+
+RUN GOOS=$TARGET_GOOS CGO_ENABLED=0 go build -v -installsuffix cgo -o chatter

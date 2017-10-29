@@ -1,0 +1,9 @@
+FROM golang:1.8
+
+ADD . /go/src/github.com/tjcelaya/chatter
+
+WORKDIR /go/src/github.com/tjcelaya/chatter
+
+ARG TARGET_GOOS=linux
+
+CMD go run main.go
