@@ -44,13 +44,10 @@ services:
       - 8500:8500
 
   chatter:
-#    image: tjcelaya/chatter:latest
     image: tjcelaya/chatter:latest
     build:
       context: .
-      dockerfile: Dockerfile.run
+      dockerfile: Dockerfile
     links:
       - consul
-    volumes:
-      - ./dist:/dist
 

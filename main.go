@@ -27,7 +27,6 @@ import (
 	c "github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/watch"
 	_ "github.com/hashicorp/consul/watch"
-	"github.com/zond/gotomic"
 )
 
 type Connection struct {
@@ -53,7 +52,7 @@ type Chatter struct {
 	state       int
 	shutdown    chan bool
 	lock        *sync.RWMutex
-	connections *gotomic.Hash
+	connections *sync.Map
 	plan        *watch.Plan
 }
 
@@ -81,7 +80,7 @@ func main() {
 		STATE_START,
 		make(chan bool),
 		&sync.RWMutex{},
-		gotomic.NewHash(),
+		&sync.Map{},
 		nil,
 	}
 
@@ -128,22 +127,22 @@ func (server *Chatter) buildListener() {
 					err.Error())
 				continue
 			}
-			addrKey := gotomic.StringKey(conn.RemoteAddr().String())
+			addrKey := conn.RemoteAddr().String()
 			log.Printf("%s accepted: %s\n", server.conn.String(), conn.RemoteAddr())
-			log.Printf("%s greeting: %s\n", server.conn.String(), conn.RemoteAddr())
+			log.Printf("%s awaiting greeting from: %s\n", server.conn.String(), conn.RemoteAddr())
 
+			greeting := make([]byte, 2)
+			r, err := conn.Read(greeting)
 			w, err := conn.Write([]byte("yo"))
-			response := make([]byte, 4)
-			r, err := conn.Read(response)
 
-			log.Printf("%s received: %s (r %d w %d) \"%s\"\n",
+			log.Printf("%s received from %s (r %d w %d) \"%s\"\n",
 				server.conn,
 				conn.RemoteAddr(),
 				r, w,
-				response)
+				greeting)
 
 			log.Printf("%s added: %s\n", server.conn, conn.RemoteAddr())
-			server.connections.Put(addrKey, conn)
+			server.connections.Store(addrKey, conn)
 		}
 	}()
 
@@ -236,22 +235,25 @@ func (server *Chatter) startSearchingForPeers() {
 		entries := data.([]*c.ServiceEntry)
 		addressToServiceEntryMap := keyByHashableConnectionAddress(entries)
 
-		server.connections.Each(func(addr gotomic.Hashable, conn gotomic.Thing) bool {
-			_, exisitingConnectionStillRegistered := addressToServiceEntryMap[addr]
+		server.connections.Range(func(addr, conn interface{}) bool {
+			addrStr := addr.(string)
+			_, exisitingConnectionStillRegistered := addressToServiceEntryMap[addrStr]
 
 			if fmt.Sprint(addr) == server.conn.String() {
 				server.indexedLog(idx, "skipping ourselves 1")
+				delete(addressToServiceEntryMap, addrStr)
 				return false
 			}
 
 			if server.listener != nil && fmt.Sprint(addr) == server.listener.Addr().String() {
 				server.indexedLog(idx, "skipping ourselves 2")
+				delete(addressToServiceEntryMap, addrStr)
 				return false
 			}
 
 			if exisitingConnectionStillRegistered {
 				log.Printf("already know about %s\n", addr)
-				delete(addressToServiceEntryMap, addr)
+				delete(addressToServiceEntryMap, addrStr)
 			} else {
 				switch connection := conn.(type) {
 				case net.Conn:
@@ -271,20 +273,21 @@ func (server *Chatter) startSearchingForPeers() {
 		// remaining connections are new guys, we don't use the value (ServiceEntry) yet
 		for addr, _ := range addressToServiceEntryMap {
 
-
 			if fmt.Sprint(addr) == server.conn.String() {
 				server.indexedLog(idx, "skipping ourselves 1")
+				delete(addressToServiceEntryMap, addr)
 				continue
 			}
 
 			if server.listener != nil && fmt.Sprint(addr) == server.listener.Addr().String() {
 				server.indexedLog(idx, "skipping ourselves 2")
+				delete(addressToServiceEntryMap, addr)
 				continue
 			}
 
 			server.indexedLog(idx, "kicking off a connection to %s\n", addr)
 
-			go func(addressKey gotomic.Hashable) {
+			go func(addressKey string) {
 
 
 				server.indexedLog(idx, "asynchronously dialing %s\n", addressKey)
@@ -298,20 +301,24 @@ func (server *Chatter) startSearchingForPeers() {
 					server.indexedLog(idx, "error dialing remote socket: %s\n", err.Error())
 					return
 				} else {
-					server.indexedLog(idx, "%s dialing (%v)\n", addressKey, elapsed.String())
+					server.indexedLog(idx, "%s dialed (%v)\n", addressKey, elapsed.String())
 				}
 
-				//greeting := make([]byte, 2)
+				start = time.Now()
+				establishedConn.Write([]byte("yo"))
+				elapsed = time.Now().Sub(start)
+				server.indexedLog(idx, "%s sent greeting (%v)\n", addressKey, elapsed.String())
 
-				//start = time.Now()
-				//establishedConn.Read(greeting)
-				//elapsed = time.Now().Sub(start)
-				//server.indexedLog(idx, "%s reading the greeting (%v)\n", addressKey, elapsed.String())
+				response := make([]byte, 2)
+				start = time.Now()
+				establishedConn.Read(response)
+				elapsed = time.Now().Sub(start)
+				server.indexedLog(idx, "%s read response(%v)\n", addressKey, elapsed.String())
 
 				start = time.Now()
-				server.connections.Put(addressKey, establishedConn)
+				server.connections.Store(addressKey, establishedConn)
 				elapsed = time.Now().Sub(start)
-				server.indexedLog(idx, "%s mapping (%v)\n", addressKey, elapsed.String())
+				server.indexedLog(idx, "%s mapped (%v)\n", addressKey, elapsed.String())
 			}(addr)
 			adds++
 		}
@@ -336,11 +343,11 @@ func (server *Chatter) indexedLog(
 		fmt.Sprintf(format, v...))
 }
 
-func keyByHashableConnectionAddress(entries []*c.ServiceEntry) map[gotomic.Hashable]*c.ServiceEntry {
-	rval := make(map[gotomic.Hashable]*c.ServiceEntry)
+func keyByHashableConnectionAddress(entries []*c.ServiceEntry) map[string]*c.ServiceEntry {
+	rval := make(map[string]*c.ServiceEntry)
 	for _, entry := range entries {
 		remoteAddr := entry.Service.Address + ":" + strconv.Itoa(entry.Service.Port)
-		rval[gotomic.StringKey(remoteAddr)] = entry
+		rval[remoteAddr] = entry
 	}
 	return rval
 }
